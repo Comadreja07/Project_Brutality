@@ -1,238 +1,204 @@
-/////////////
-//LASER API//
-/////////////
-
-/*
-			SecuLaserz ClassAPI created by Lewisk3 (Redxone) 
-
-	SPECIAL THANKS: 
-		Xaser (One of the main reasons i got into Doom modding)
-		phantombeta (ZScript sensei)
-		TheZombieKiller (ZScript sensei)
-		Tapwave (Some design, ZScript help)
-		Gutawer (Helped out in just about every question/problem i had.)
-
-    Disclaimer:
-		There are multiple ways to do lasers, this one creates them out of sprites
-		which if done right can look really good. You could also use a 3D model (If you are a masochist)
-        or a couple flat sprites.		
-
-	Copyright:
-		You may use this in your mod provided you DO NOT remove this
-		comment block.
-		Please provide credit if you decide to post your mod on the forums
-		and you are using this API.
-
-	Documentation:
-	|
-	|1  Creating lasers
-	|	--> To create a laser from complete scratch you must follow 3 steps.
-	|		: 1 - Include this file in your main ZScript lump. Example below
-	|		  | Create a ZSCRIPT lump inside put
-	|		  | #include "<location>/lasers.zsc"
-	|		: 2 - Initialize laser sprites. Example below.
-	|		  | class LaserSpritesYay : Actor
-	|		  | {
-	|		  |	    States
-	|		  |		{
-	|		  |			Sprites: // State can be called whatever you want too!
-	|		  |				#### # -1;
-	|		  |				#### # -1;
-	|		  |				//etc..
-	|		  |		}
-	|		  | }
-	|		: 3 - Create a laser class extending MWLaser. Example below
-	|		  |	 class MyLaser : MWLaser {};	
-	|		  This laser will currently fire an invisble beam dealing 5 damage!
-	|		
-	|2  Customizing lasers
-	|	--> There are multiple properties you can use to customize your lasers. See Below
-	|		 MWLaser.frontOffset	: How far infront of the player the laser is. (Def -100, front to back).
-	|		 MWLaser.range          : How far the laser can shoot. (Damage dropoff).
-	|        MWLaser.laserSprite    : How the laser will look. (Takes a sprite name "####").
-	|        MWLaser.laserSize      : How large a laser looks. (Def 0.15, works like Scale).
-	|		 MWLaser.speedFactor    : How fast the laser moves relative to "lightspeed" (Def 1.0);
-	|3  Firing lasers
-	|	--> There are 2 ways to fire a laser
-	|		: 1 - Use LaserWeapon
-	|		  | This way is the easiest but requires you are firing it from a weapon.
-	|		  | To use LaserWeapon extend your weapon by it. (class Pewpew : LaserWeapon)
-	|		  | In your "Fire" state call shootLaser or shootLaserEx
-	|		  | shootLaser(Name laserclass, int offsx, int offsy, Name laserpuff);
-	|		  | shootLaserEx(Name laserclass, int offsx, int offsy, Name laserpuff, int frontOffset);
-	|		: 2 - Use A_FireProjectile
-	|		  | This way is more manual but will work on anything that supports FireProjectile. 
-	|		  | A_FireProjectile(Name class, int angle, bool useammo, int offsx, int offsy);
-	|		  | It is also very powerful, you can use it to access every laser property! Example below.
-	|		  | let laserproj = A_FireProjectile(...);
-	|         | let laser = MWLaser (laserproj);
-	|         | laser.<property> = <value>
-	|		  | The properties go by their variable names and not by their default definitions. See Below
-	|         | frontOffset = DistanceOffs
-	|         | range       = MaxRange
-	|         | laserSprite = graphic
-	|         | laserSize   = graphicScalar
-	End Doc.
-*/
-
-
-
-class LaserFollower : FastProjectile
+class BEAMZ_LaserBeam : Actor
 {
-	string followSprite;
-	int lifetime;
-	property lsprite: followSprite;
-	property live : lifetime;
+	Color shade;
 
+	double maxDist;
+	int ontics;
+	bool enabled;
+	Actor source;
+	vector3 curPos;
+	vector3 offsets;
+	vector2 angleOffsets;
+	vector3 curOffs;
+	transient FLineTraceData hitData;
+	
+	bool trackingPos;
+	vector3 targetPos;
+	
+	bool aimWithWeapon;
+	bool trackPSprite;
+	uint trackPSLayer;
+	
+	bool followAngles;
+	Property TrackAngles : followAngles;
+	Property TrackWeapon : trackPSprite, trackPSLayer;
+	Property AimFromWeapon : aimWithWeapon; 
+	Property LaserColor : shade;
+	
 	Default
 	{
-		+NOGRAVITY
-		+NOINTERACTION
-		+NOBLOCKMAP
-		Radius 2;
-		Height 2;
-		Alpha 1.0;
-		Speed 0;
-		RenderStyle "Add"; 
-		Damage 0;
-		Scale 0.15;
-		PROJECTILE;
-		//LaserFollower.lsprite "TNT1";
-		LaserFollower.live 1;
-		+RANDOMIZE
-		+FORCEXYBILLBOARD
+		Scale 1.0;
+		+NOINTERACTION;
+		+INTERPOLATEANGLES;
+		RenderStyle "AddShaded";
+		
+		BEAMZ_LaserBeam.LaserColor "Blue";
+		BEAMZ_LaserBeam.TrackAngles true;				// Update with player's view.
+		BEAMZ_LaserBeam.TrackWeapon true, PSP_WEAPON; // Offset by PSprite offsets.
+		BEAMZ_LaserBeam.AimFromWeapon true;			// Fire from weapon "muzzle", only used if TrackWeapon is enabled.
 	}
-
+	
+	static BEAMZ_LaserBeam Create(Actor source, double fw, double lr, double ud, double angleOffs = 0, double pitchOffs = 0, double maxDist = 2048, class<BEAMZ_LaserBeam> type = "BEAMZ_LaserBeam")
+	{
+		let laser = BEAMZ_LaserBeam(Spawn(type, source.pos));
+		if(laser) 
+		{
+			laser.source = source;
+			laser.maxDist = maxDist;
+			laser.offsets = (fw, lr, ud);
+			laser.angleOffsets = (angleOffs, pitchOffs);
+		}
+		
+		return laser;
+	}
+	
+	void setEnabled(bool set)
+	{
+		enabled = set;
+	}
+	
+	void startTracking(vector3 toPos)
+	{
+		trackingPos = true;
+		targetPos = toPos;
+	}
+	
+	void aimAtCrosshair()
+	{
+		double zoffs = source.height*0.5;
+		if(source.player) zoffs = source.player.viewz - source.pos.z;
+	
+		FLineTraceData lt;
+		source.LineTrace(source.angle, maxDist, source.pitch, offsetz:zoffs, offsetforward:source.radius, data:lt);
+		if(lt.HitType != TRACE_HitNone) 
+		{
+			vector3 aimAngles = level.SphericalCoords(curPos, lt.HitLocation, (source.angle,source.pitch));
+			angleOffsets.x = aimAngles.x;
+			angleOffsets.y = aimAngles.y;
+		}
+	}
+	
+	void stopTracking()
+	{
+		if(trackingPos) ontics = 0;
+		trackingPos = false;
+	}
+	
+	bool isTracking()
+	{
+		return trackingPos;
+	}
+	
+	virtual vector3 getSourcePos()
+	{
+		vector3 srcPos = (source.pos.xy, source.pos.z + (source.height * 0.5));
+		if(source.player) srcPos.z = source.player.viewz;
+		
+		return srcPos;
+	}
+	
+	virtual void BeamTick()
+	{
+		// Implement custom laser logic here.
+	}
+	
+	virtual void OnImpact(vector3 hitPos, Actor hitActor)
+	{
+		// On impact with something
+	}
+	
+	override void Tick()
+	{
+		if(isFrozen()) return;
+		if(!enabled || !source) 
+		{
+			ontics = 0;
+			bInvisible = true;
+			return;
+		}
+		ontics++;
+		bInvisible = ontics < 3;
+		if(shade) SetShade(shade);
+		
+		if(ontics == 2)
+		{
+			OnImpact(hitData.hitLocation, hitdata.hitActor);
+		}
+				
+		// PSprite tracking?
+		vector2 bob = (0,0);
+		if(trackPSprite && PlayerPawn(source))
+		{
+			let psp = source.player.GetPSprite(trackPSLayer);
+			bob = PlayerPawn(source).BobWeapon(1.0);
+			
+			bob.x += psp.x;
+			bob.y += (psp.y - 32);
+			bob.x *= 0.031;
+			bob.y *= 0.035;
+		}
+		
+		// Update laser and tracking.
+		curOffs = BEAMZ_BeamzMath.offsetToGlobal(
+			source.angle, source.pitch, source.roll,
+			offsets.x, offsets.y + bob.x, offsets.z - bob.y
+		);
+		
+		vector3 finalPos = level.vec3offset(getSourcePos(), curOffs);
+		SetOrigin(finalPos, true);
+		curPos = finalPos;
+		
+		double toAngle = source.angle + angleOffsets.x;
+		double toPitch = source.pitch + angleOffsets.y;
+		if(aimWithWeapon) 
+		{
+			toAngle -= (bob.x * 10);
+			toPitch += (bob.y * 10);  
+		}	
+		
+		// Track target and source's angles.
+		if(trackingPos)
+		{
+			vector3 diff = level.vec3diff(finalPos, targetPos);
+			vector3 dir = diff.Unit();
+			
+			toAngle = angleOffsets.x + atan2(dir.y, dir.x) + 180; 
+			toPitch = angleOffsets.y + asin(dir.z);
+			A_SetAngle(toAngle, SPF_INTERPOLATE);
+			A_SetPitch(toPitch - 90, SPF_INTERPOLATE);		
+		} 
+		else if(followAngles)
+		{
+			A_SetAngle(toAngle, SPF_INTERPOLATE);
+			A_SetPitch(toPitch+90, SPF_INTERPOLATE);
+		}
+		
+		// Credits: This interpolation magic was gleaned from Kodi's KLazer library
+		// code available in PainSlayer 
+		// (https://github.com/jekyllgrim/Painslayer/blob/master/ZPainkiller/klazer/KLAZ_Beam.zsc#L114)
+		
+		// Odd interpolation magic.
+		double prevAngle = source.angle;
+		source.A_SetAngle(source.angle + 0.001, SPF_INTERPOLATE);
+		source.A_SetAngle(prevAngle, SPF_INTERPOLATE);
+		
+		// Do linetrace to determine aim distance.
+		double zoffs = source.player ? (source.player.viewz-source.pos.z) : source.height * 0.5;
+		source.LineTrace(angle, maxDist, pitch - 90, 0, zoffs+offsets.z-bob.y, offsets.x, offsets.y-bob.x, data:hitData);
+		
+		// Scale to Distance.
+		double dist = min(hitData.Distance, maxDist);
+		double dirPitch = pitch - 90;
+		scale.y = dist * level.pixelstretch;
+					
+		BeamTick();
+	}
+	
 	States
 	{
 		Spawn:
-			TNT1 A 0; // Interesting little bug here that NoDelay doesn't fix.
-			TNT1 A 1 Fast
-			{
-				tics = lifetime;
-				sprite = GetSpriteIndex(invoker.followSprite);
-			}
+			M0DL Z -1 Bright;
 		stop;
-
-	}
-}
-
-class MWLaser : FastProjectile
-{
-
-	int DistanceOffs;
-	int MaxRange;
-	int DistanceTraveled; // In meters.
-	string graphic;
-	double graphicScalar;
-	double speedOffs;
-	double laserdensity;
-	double laserConverge;
-	int followDuration;
-	int trailrng;
-	int laserRenderAmt;
-
-	property frontOffset: DistanceOffs;
-	property range : MaxRange;
-	property InitalRange: DistanceTraveled;
-	property laserSprite : graphic;
-	property laserSize  : graphicScalar;
-	property speedFactor : speedOffs;
-	property laserDensity : laserdensity;
-	property trailDuration : followDuration;
-	property laserRenderDistance : laserRenderAmt;
-	property trailChance : trailrng;
-	property convergeScalar : laserConverge;
-
-	Default
-	{
-		// Laser Range:
-		// 200upt.
-		// 32units = 1m
-		// 1 frame = 7m.
-
-		+NOGRAVITY
-		Radius 1;
-		Height 1;
-		Alpha 1.0;
-		Speed 200; // "Lightspeed"
-		RenderStyle "Add";
-		Damage 0;
-		Decal "DoomImpScorch";
-		PROJECTILE;
-		MWLaser.frontOffset -98;
-		MWLaser.range 500;
-		MWLaser.InitalRange 0;
-		MWLaser.laserSprite "TNT1";
-		MWLaser.laserSize 0.10;
-		MWLaser.speedFactor 1.0;
-		MWLaser.trailDuration 1;
-		MWLaser.trailChance 0;
-		MWLaser.laserDensity 50.0;
-		MWLaser.laserRenderDistance 200;
-		MWLaser.convergeScalar 1.0;
-		+RANDOMIZE
-		+FORCEXYBILLBOARD
-	}
-
-	Override void postBeginPlay()
-	{
-		spawnLaser("LaserFollower");
-		Super.postBeginPlay();
-	}
-	Override void tick()
-	{
-		//A_Warp(AAPTR_TARGET,0,0,-10, 0, WARPF_COPYVELOCITY | WARPF_COPYINTERPOLATION );
-		DistanceTraveled += floor(speed/32)+1;
-		if(DistanceTraveled >= MaxRange)Destroy();
-		//console.printf("%s: %i :> %i","Laser dist: ",DistanceTraveled,MaxRange);
-		Super.tick();
-	}
-
-	void spawnLaser(Name laserclass)
-	{
-		if(DistanceTraveled < MaxRange)
-		{
-			int distc = DistanceOffs;
-			double fD = distc;
-			double sx = 0.06;
-			double sy = 0.06;
-			double density = laserdensity+CVar.findCVar("sd_lasers_densityoffset").getInt();
-			for(double i = 0; i < laserRenderAmt; i++)
-			{
-				if(random(0,trailrng) == trailrng)
-				{
-					//console.printf("%i: %s :> %d",i,"Laser",fD);
-					double spawnX = ((fD*vel.x)/-density);
-					double spawnY = -(fD*vel.y)/-density;
-					double spawnZ = 2+(fD*vel.z)/-density;
-					bool success; Actor trail;
-					[success, trail] = A_SpawnItemEx(laserclass, spawnX, spawnY, spawnZ, 0,0,0,0, SXF_ABSOLUTEANGLE | SXF_NOCHECKPOSITION);
-					let las = LaserFollower(trail);
-					las.followSprite = graphic;
-					las.Scale.X        =sx; //graphicScalar- (i / 100)/10;
-					las.Scale.Y        =sy; //graphicScalar- (i / 100)/10;
-					las.lifetime      = followDuration;
-					sx += (graphicScalar/(laserRenderAmt*laserConverge));
-					sy += (graphicScalar/(laserRenderAmt*laserConverge));
-					fD = distc+((i+1)/2);
-				}
-			}
-		}
-	}
-
-	// Used for max-range.
-	States
-	{
-		Spawn:
-		TNT1 A 0 NoDelay
-		{
-			A_ScaleVelocity(invoker.speedOffs);
-			//spawnLaser("LaserFollower");
-		}
-		LaserDone:
-			TNT1 A 1;
-		loop;
 	}
 }
 
